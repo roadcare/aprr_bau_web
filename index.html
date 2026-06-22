@@ -53,13 +53,16 @@ if (typeof Chart === "undefined") { document.write('<scr'+'ipt src="https://cdn.
   .legend { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:12px; margin-top:6px; color:var(--muted); }
   canvas { margin-top:4px; }
   #tablebar { display:flex; gap:8px; align-items:center; padding:6px 10px; border-bottom:1px solid var(--line); }
-  #tablebar input { flex:1; }
-  table { border-collapse:collapse; width:100%; font-size:12px; }
-  thead th { position:sticky; top:0; background:#eef1f6; cursor:pointer; padding:5px 8px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap; }
+  #tablebar input[type=text] { flex:1; }
+  #btnXlsx { background:#1a7f4b; color:#fff; border:0; border-radius:5px; padding:4px 10px; cursor:pointer; font-weight:600; white-space:nowrap; }
+  #btnXlsx:hover { background:#16683e; }
+  table { border-collapse:collapse; font-size:12px; width:max-content; min-width:100%; }
+  thead th { position:sticky; top:0; z-index:1; background:#eef1f6; cursor:pointer; padding:5px 8px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap; }
   thead th:first-child, td:first-child { text-align:left; }
-  tbody td { padding:4px 8px; text-align:right; border-bottom:1px solid #eef1f6; }
+  tbody td { padding:4px 8px; text-align:right; border-bottom:1px solid #eef1f6; white-space:nowrap; }
   tbody tr:hover { background:#eef6ff; }
-  #tablescroll { overflow:auto; }
+  /* both scrollbars: bounded height -> vertical; max-content table -> horizontal */
+  #tablescroll { overflow:auto; max-height:34vh; }
   button.mini { background:var(--accent); color:#fff; border:0; border-radius:5px; padding:2px 8px; cursor:pointer; font-weight:600; }
   .muted { color:var(--muted); font-size:11px; }
   .leaflet-popup-content { font-size:12px; max-height:240px; overflow:auto; }
@@ -155,8 +158,9 @@ if (typeof Chart === "undefined") { document.write('<scr'+'ipt src="https://cdn.
       <div id="tablebar">
         <input type="text" id="tblFilter" placeholder="filtrer le tableau…"/>
         <span class="muted">clic sur un entête pour trier</span>
+        <button id="btnXlsx" title="Exporter le tableau filtré en .xlsx">⬇ Excel (.xlsx)</button>
       </div>
-      <div id="tablescroll"><table id="tbl"><thead></thead><tbody></tbody></table></div>
+      <div id="tablescroll"><table id="tbl" class="pt"><thead></thead><tbody></tbody></table></div>
     </details>
   </div>
 </div>
@@ -331,12 +335,11 @@ function updateCharts(props){
 }
 
 /* ---------- table ---------- */
-function prText(p){ if(p.prd==null) return ""; return p.prd+"+"+Math.round(p.abd||0)+" → "+p.prf+"+"+Math.round(p.abf||0); }
-function cell(p,key){ if(key==="pr") return prText(p); var v=p[key]; if(typeof v==="boolean") return v?"oui":""; return (typeof v==="number")?(Math.round(v*10)/10):(v==null?"":v); }
-var TBL_COLS=[["axe","Axe"],["pr","PR (d→f)"],["cumuld","Cd"],["cumulf","Cf"],["surface","Surf"],
+function cell(p,key){ var v=p[key]; if(typeof v==="boolean") return v?"oui":""; return (typeof v==="number")?(Math.round(v*10)/10):(v==null?"":v); }
+var TBL_COLS=[["axe","Axe"],["prd","prd"],["abd","abd"],["prf","prf"],["abf","abf"],["cumuld","Cd"],["cumulf","Cf"],["surface","Surf"],
   ["note_Fissuration","nF"],["note_Faiencage","nFa"],["note_Arrachement","nA"],
   ["IF","IF"],["IA","IA"],["IG","IG"],["classe_IG","cIG"],["sonorive_count","Son."],["sonorive_presente","S>2"]];
-var tblSort={key:"IG",asc:true}, tblColFilter={}, lastTblProps=[], tblHeadBuilt=false;
+var tblSort={key:"IG",asc:true}, tblColFilter={}, lastTblProps=[], tblHeadBuilt=false, tblRows=[];
 function renderHeadSort(){
   document.querySelectorAll("#tbl thead th[data-k]").forEach(function(th){
     var base=TBL_COLS.find(function(c){return c[0]===th.dataset.k;})[1];
@@ -360,10 +363,11 @@ function renderBody(){
     return TBL_COLS.every(function(c){ var fv=tblColFilter[c[0]]; return !fv || String(cell(p,c[0])).toLowerCase().indexOf(fv)>=0; });
   });
   rows.sort(function(a,b){ var k=tblSort.key,d=tblSort.asc?1:-1;
-    var x=(k==="pr")?prText(a):a[k], y=(k==="pr")?prText(b):b[k];
+    var x=a[k], y=b[k];
     if(x==null) return 1; if(y==null) return -1;
     if(typeof x==="number"&&typeof y==="number") return (x-y)*d;
     return String(x).localeCompare(String(y))*d; });
+  tblRows=rows;   // full filtered+sorted set (used by the .xlsx export)
   document.getElementById("tblN").textContent=props.length;
   var shown=rows.slice(0,800);
   var tb=document.querySelector("#tbl tbody"); tb.innerHTML="";
@@ -377,6 +381,66 @@ function renderBody(){
 function zoomToPas(id){
   var f=LAYERS.pas_20.features.find(function(x){return x.properties.id===id;}); if(!f) return;
   try{ var b=L.geoJSON(f).getBounds(); if(b.isValid()) map.fitBounds(b,{maxZoom:18,padding:[40,40]}); }catch(e){}
+}
+
+/* ---------- .xlsx export of the (filtered) table — dependency-free ---------- */
+/* Builds a minimal OOXML workbook and zips it with STORED (no-compression)
+   entries, so it works fully offline with no SheetJS dependency. */
+var _crcT=(function(){var t=[],c,n,k;for(n=0;n<256;n++){c=n;for(k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[n]=c>>>0;}return t;})();
+function _crc32(u8){var c=0xFFFFFFFF;for(var i=0;i<u8.length;i++)c=_crcT[(c^u8[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+function _xmlEsc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+function _colL(n){var s="";n++;while(n>0){var m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=(n-(m+1))/26;}return s;}
+function _sheetXml(headers, rows){
+  function rowXml(r, vals){
+    var cells=vals.map(function(v,ci){var ref=_colL(ci)+r;
+      if(typeof v==="number" && isFinite(v)) return "<c r=\""+ref+"\"><v>"+v+"</v></c>";
+      if(v==null||v==="") return "<c r=\""+ref+"\"/>";
+      return "<c r=\""+ref+"\" t=\"inlineStr\"><is><t xml:space=\"preserve\">"+_xmlEsc(v)+"</t></is></c>";
+    }).join("");
+    return "<row r=\""+r+"\">"+cells+"</row>";
+  }
+  var body=rowXml(1,headers);
+  rows.forEach(function(rw,i){ body+=rowXml(i+2,rw); });
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'+body+'</sheetData></worksheet>';
+}
+function _zip(files){
+  var enc=new TextEncoder(), parts=[], central=[], offset=0;
+  function u16(n){return [n&255,(n>>8)&255];}
+  function u32(n){return [n&255,(n>>8)&255,(n>>16)&255,(n>>24)&255];}
+  files.forEach(function(f){
+    var name=enc.encode(f.name), data=(f.data instanceof Uint8Array)?f.data:enc.encode(f.data), crc=_crc32(data);
+    var lh=[].concat(u32(0x04034b50),u16(20),u16(0x0800),u16(0),u16(0),u16(0),u32(crc),u32(data.length),u32(data.length),u16(name.length),u16(0));
+    parts.push(new Uint8Array(lh), name, data);
+    central.push({name:name,crc:crc,len:data.length,off:offset});
+    offset += lh.length+name.length+data.length;
+  });
+  var cd=[], cdStart=offset;
+  central.forEach(function(c){
+    var h=[].concat(u32(0x02014b50),u16(20),u16(20),u16(0x0800),u16(0),u16(0),u16(0),u32(c.crc),u32(c.len),u32(c.len),u16(c.name.length),u16(0),u16(0),u16(0),u16(0),u32(0),u32(c.off));
+    cd.push(new Uint8Array(h), c.name); offset += h.length+c.name.length;
+  });
+  var cdSize=offset-cdStart;
+  var eocd=new Uint8Array([].concat(u32(0x06054b50),u16(0),u16(0),u16(central.length),u16(central.length),u32(cdSize),u32(cdStart),u16(0)));
+  var blobs=parts.concat(cd); blobs.push(eocd);
+  return new Blob(blobs,{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+}
+function exportTableXlsx(){
+  var headers=TBL_COLS.map(function(c){return c[1];});
+  var rows=tblRows.map(function(p){ return TBL_COLS.map(function(c){
+    var v=p[c[0]]; if(typeof v==="boolean") return v?"oui":"non";
+    return (v==null?"":v);
+  }); });
+  var files=[
+    {name:"[Content_Types].xml", data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'},
+    {name:"_rels/.rels", data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'},
+    {name:"xl/workbook.xml", data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="pas_20" sheetId="1" r:id="rId1"/></sheets></workbook>'},
+    {name:"xl/_rels/workbook.xml.rels", data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'},
+    {name:"xl/worksheets/sheet1.xml", data:_sheetXml(headers, rows)}
+  ];
+  var url=URL.createObjectURL(_zip(files));
+  var a=document.createElement("a"); a.href=url; a.download="pas_20_filtre_"+rows.length+".xlsx";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(function(){URL.revokeObjectURL(url);},2000);
 }
 
 /* ---------- controls ---------- */
@@ -393,6 +457,7 @@ function buildControls(){
   document.getElementById("fIg").oninput=function(e){ document.getElementById("fIgVal").textContent=e.target.value; buildPas(); };
   document.getElementById("fText").oninput=buildPas;
   document.getElementById("tblFilter").oninput=function(){ renderBody(); };
+  document.getElementById("btnXlsx").onclick=exportTableXlsx;
   document.getElementById("reset").onclick=function(){
     fa.value=""; document.getElementById("fIg").value=20; document.getElementById("fIgVal").textContent="20";
     document.getElementById("fText").value=""; document.getElementById("tblFilter").value="";
