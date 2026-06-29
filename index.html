@@ -56,6 +56,7 @@ if (typeof Chart === "undefined") { document.write('<scr'+'ipt src="https://cdn.
   #tablebar input[type=text] { flex:1; }
   #tablebar button.exp { color:#fff; border:0; border-radius:5px; padding:4px 10px; cursor:pointer; font-weight:600; white-space:nowrap; }
   #btnXlsx { background:#1a7f4b; } #btnXlsx:hover { background:#16683e; }
+  #btnCsv { background:#557; } #btnCsv:hover { background:#445; }
   #btnGeojson { background:#1f78b4; } #btnGeojson:hover { background:#185f8d; }
   #btnShp { background:#b5651d; } #btnShp:hover { background:#8f4f16; }
   table { border-collapse:collapse; font-size:12px; width:max-content; min-width:100%; }
@@ -161,6 +162,7 @@ if (typeof Chart === "undefined") { document.write('<scr'+'ipt src="https://cdn.
         <input type="text" id="tblFilter" placeholder="filtrer le tableau…"/>
         <span class="muted">clic sur un entête pour trier</span>
         <button id="btnXlsx" class="exp" title="Exporter le tableau filtré en .xlsx">⬇ Excel (.xlsx)</button>
+        <button id="btnCsv" class="exp" title="Exporter le tableau filtré en .csv">⬇ CSV</button>
         <button id="btnGeojson" class="exp" title="Exporter les pas filtrés en GeoJSON">⬇ GeoJSON</button>
         <button id="btnShp" class="exp" title="Exporter les pas filtrés en Shapefile (.zip)">⬇ Shapefile</button>
       </div>
@@ -447,6 +449,22 @@ function exportTableXlsx(){
   document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(function(){URL.revokeObjectURL(url);},2000);
 }
 
+/* ---------- .csv export of the (filtered) table ---------- */
+function _csvCell(v){
+  if(v==null) return "";
+  if(typeof v==="boolean") return v?"oui":"non";
+  var s=String(v);
+  return /[",\r\n;]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+}
+function exportTableCsv(){
+  var headers=TBL_COLS.map(function(c){return c[1];});
+  var lines=[headers.map(_csvCell).join(",")];
+  tblRows.forEach(function(p){ lines.push(TBL_COLS.map(function(c){return _csvCell(p[c[0]]);}).join(",")); });
+  // UTF-8 BOM so Excel reads the accents (Fissuration / Faiençage…) correctly
+  var blob=new Blob(["﻿"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
+  _download(blob, "pas_20_filtre_"+tblRows.length+".csv");
+}
+
 /* ---------- pas_20 geometry exports (GeoJSON + Shapefile) ---------- */
 /* The table holds only properties; map the filtered+sorted rows (tblRows) back
    to the full GeoJSON features by id so the geometry travels with them. Falls
@@ -632,6 +650,7 @@ function buildControls(){
   document.getElementById("fText").oninput=buildPas;
   document.getElementById("tblFilter").oninput=function(){ renderBody(); };
   document.getElementById("btnXlsx").onclick=exportTableXlsx;
+  document.getElementById("btnCsv").onclick=exportTableCsv;
   document.getElementById("btnGeojson").onclick=exportPasGeojson;
   document.getElementById("btnShp").onclick=exportPasShapefile;
   document.getElementById("reset").onclick=function(){
