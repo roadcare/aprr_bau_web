@@ -410,6 +410,18 @@ function zoomToPas(id){
   var f=LAYERS.pas_20.features.find(function(x){return x.properties.id===id;}); if(!f) return;
   try{ var b=L.geoJSON(f).getBounds(); if(b.isValid()) map.fitBounds(b,{maxZoom:18,padding:[40,40]}); }catch(e){}
 }
+/* fit the map to a chosen axe's pas (empty axe -> back to the full extent) */
+function zoomToAxe(axe){
+  if(!axe){
+    if(CFG.bounds){ map.fitBounds([[CFG.bounds[1],CFG.bounds[0]],[CFG.bounds[3],CFG.bounds[2]]]); }
+    return;
+  }
+  var fc=LAYERS.pas_20; if(!fc) return;
+  var feats=fc.features.filter(function(f){ return f.properties.axe===axe; });
+  if(!feats.length) return;
+  try{ var b=L.geoJSON({type:"FeatureCollection",features:feats}).getBounds();
+       if(b.isValid()) map.fitBounds(b,{padding:[30,30]}); }catch(e){}
+}
 
 /* ---------- .xlsx export of the (filtered) table — dependency-free ---------- */
 /* Builds a minimal OOXML workbook and zips it with STORED (no-compression)
@@ -667,7 +679,7 @@ function buildControls(){
   var axes={}; (LAYERS.pas_20?LAYERS.pas_20.features:[]).forEach(function(f){ if(f.properties.axe) axes[f.properties.axe]=1; });
   var fa=document.getElementById("fAxe");
   Object.keys(axes).sort().forEach(function(a){ var o=document.createElement("option"); o.value=a;o.textContent=a; fa.appendChild(o); });
-  fa.onchange=buildPas;
+  fa.onchange=function(){ buildPas(); zoomToAxe(fa.value); };
   document.getElementById("fIg").oninput=function(e){ document.getElementById("fIgVal").textContent=e.target.value; buildPas(); };
   document.getElementById("fText").oninput=buildPas;
   document.getElementById("tblFilter").oninput=function(){ renderBody(); };
