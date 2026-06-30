@@ -178,8 +178,9 @@ if (typeof Chart === "undefined") { document.write('<scr'+'ipt src="https://cdn.
 <script src="pas_20.js"></script>
 <script src="pr.js"></script>
 <script src="labels.js"></script>
+<script src="changement_revetement_bau.js"></script>
 <script>
-var CFG = {"tile_url": "https://{s}.tile.openstreetmap.de/{z}/{x}/{y}.png", "tile_attribution": "&copy; OpenStreetMap", "tile_subdomains": "abc", "label_zoom_min": 17, "bounds": [6.257463, 45.556254, 6.281328, 45.559562]};
+var CFG = {"tile_url": "https://{s}.tile.openstreetmap.de/{z}/{x}/{y}.png", "tile_attribution": "&copy; OpenStreetMap", "tile_subdomains": "abc", "label_zoom_min": 17, "bounds": [4.728129, 45.512238, 6.309058, 46.111975]};
 var LAYERS = window.LAYERS || {};
 function showErr(m){ var d=document.getElementById("err"); if(d){ d.style.display="block"; d.textContent=m; } }
 window.addEventListener("error", function(e){ showErr("Erreur : "+(e && e.message ? e.message : e)); });
@@ -193,10 +194,15 @@ var TICK = "#6b7785";
 // distinct colour per road_data sous_classe (built from the data)
 var SOUS_PALETTE = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#42d4f4','#f032e6',
   '#bfef45','#fabed4','#469990','#9a6324','#800000','#808000','#000075','#ff7f00','#a9a9a9'];
+var SONORIVE_COLOR = "#8a6dff";
+var CHG_COLOR = "#111111";   // changement_revetement_bau intersection lines
+// "AUTRE" detections are NOT shown among the sous_classe detections — they are
+// split off into the dedicated "Sonorive" layer instead.
+function isAutre(v){ return /^\s*autre\s*$/i.test(String(v==null?"":v)); }
 var sousColorMap = {};
 (function(){
   var d = LAYERS.road_data; if(!d) return;
-  var vals={}; d.features.forEach(function(f){ var v=f.properties.sous_classe; if(v) vals[v]=1; });
+  var vals={}; d.features.forEach(function(f){ var v=f.properties.sous_classe; if(v && !isAutre(v)) vals[v]=1; });
   Object.keys(vals).sort().forEach(function(v,i){ sousColorMap[v]=SOUS_PALETTE[i%SOUS_PALETTE.length]; });
 })();
 function sousColor(v){ return sousColorMap[v] || '#888'; }
@@ -243,7 +249,8 @@ function styleStatic(name){
     var p=f.properties;
     if(name==="degradations"){ return { color:CLASSE_COLORS[p.classe_finale]||"#888", weight:1, fillColor:CLASSE_COLORS[p.classe_finale]||"#888", fillOpacity:.5 }; }
     if(name==="road_data"){ var c=sousColor(p.sous_classe); return { color:c, weight:.7, fillColor:c, fillOpacity:.45 }; }
-    if(name==="sonorive"){ return { color:"#6f42c1", weight:.6, fillColor:"#8a6dff", fillOpacity:.4 }; }
+    if(name==="sonorive"){ return { color:"#6f42c1", weight:.6, fillColor:SONORIVE_COLOR, fillOpacity:.4 }; }
+    if(name==="changement_revetement_bau"){ return { color:CHG_COLOR, weight:4, opacity:.9, dashArray:"6,4" }; }
     return { color:"#789", weight:.5, fillOpacity:.2 };
   };
 }
@@ -254,12 +261,26 @@ var POINT_STYLE = {
 
 function addStatic(name){
   var fc = LAYERS[name]; if(!fc) return;
-  var lyr = L.geoJSON(fc, {
+  var feats = fc.features;
+  // detections layer hides the "AUTRE" rows (they go into the Sonorive layer)
+  if(name==="road_data"){ feats = feats.filter(function(f){ return !isAutre(f.properties.sous_classe); }); }
+  var lyr = L.geoJSON({type:"FeatureCollection",features:feats}, {
     style: styleStatic(name),
     pointToLayer: function(f,latlng){ return L.circleMarker(latlng, POINT_STYLE[name] || POINT_STYLE.image); },
     onEachFeature: function(f,l){ l.bindPopup(popupHtml(name,f.properties)); }
   });
   groups[name]=lyr;
+}
+
+/* Sonorive layer = the "AUTRE" detections extracted from road_data. */
+function addSonorive(){
+  var fc = LAYERS.road_data; if(!fc) return;
+  var feats = fc.features.filter(function(f){ return isAutre(f.properties.sous_classe); });
+  if(!feats.length) return;
+  groups.sonorive = L.geoJSON({type:"FeatureCollection",features:feats}, {
+    style: function(){ return { color:"#6f42c1", weight:.6, fillColor:SONORIVE_COLOR, fillOpacity:.45 }; },
+    onEachFeature: function(f,l){ l.bindPopup(popupHtml("sonorive",f.properties)); }
+  });
 }
 
 /* labels: divIcon text markers — n_pr for PR, "axe : prd+abd à prf+abf" for pas */
@@ -344,7 +365,8 @@ function updateCharts(props){
 function cell(p,key){ var v=p[key]; if(typeof v==="boolean") return v?"oui":""; return (typeof v==="number")?(Math.round(v*10)/10):(v==null?"":v); }
 var TBL_COLS=[["axe","Axe"],["prd","prd"],["abd","abd"],["prf","prf"],["abf","abf"],["cumuld","Cd"],["cumulf","Cf"],["surface","Surf"],
   ["note_Fissuration","nF"],["note_Faiencage","nFa"],["note_Arrachement","nA"],
-  ["IF","IF"],["IA","IA"],["IG","IG"],["classe_IG","cIG"],["sonorive_count","Son."],["sonorive_presente","S>2"]];
+  ["IF","IF"],["IA","IA"],["IG","IG"],["classe_IG","cIG"],["sonorive_count","Son."],["sonorive_presente","S>2"],
+  ["changement_revetement_bau","Chgt"]];
 var tblSort={key:"IG",asc:true}, tblColFilter={}, lastTblProps=[], tblHeadBuilt=false, tblRows=[];
 function renderHeadSort(){
   document.querySelectorAll("#tbl thead th[data-k]").forEach(function(th){
@@ -664,6 +686,8 @@ function buildControls(){
 function setupLayerControl(){
   var order=[["pas_20","Pas 20 m (IG)",true],["degradations","Dégradations (classe finale)",true],
              ["road_data","Détections (par sous_classe)",false],
+             ["sonorive","Sonorive",false],
+             ["changement_revetement_bau","Changement revêtement (BAU)",false],
              ["pr","Points repères (PR)",false],["labels","Étiquettes (PR / pas)",false],
              ["image","Images (points)",false]];
   var overlays={};
@@ -697,6 +721,12 @@ function updateMapLegend(){
     h+="<b>Détections — sous_classe</b>";
     Object.keys(sousColorMap).sort().forEach(function(v){ h+="<div><i style='background:"+sousColorMap[v]+"'></i>"+v+"</div>"; });
   }
+  if(visibleLayers["Sonorive"]){
+    h+="<b>Sonorive</b><div><i style='background:"+SONORIVE_COLOR+"'></i>Sonorive (détections « AUTRE »)</div>";
+  }
+  if(visibleLayers["Changement revêtement (BAU)"]){
+    h+="<b>Changement revêtement</b><div><i style='background:"+CHG_COLOR+"'></i>Intersection changement / pas</div>";
+  }
   mapLegend._div.innerHTML=h;
 }
 /* hide the (numerous) pas labels when zoomed out to avoid clutter */
@@ -717,7 +747,8 @@ function buildKpis(){
 }
 
 /* ---------- boot ---------- */
-["image","road_data","degradations","pr"].forEach(addStatic);
+["image","road_data","degradations","pr","changement_revetement_bau"].forEach(addStatic);
+addSonorive();
 addLabels();
 buildControls();
 buildLegend();
